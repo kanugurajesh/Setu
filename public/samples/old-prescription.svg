@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1180" viewBox="0 0 900 1180">
+  <!-- Synthetic prescription for the OCR demo. Fictional centre, patient and doctor. -->
+  <defs>
+    <pattern id="rule" width="900" height="56" patternUnits="userSpaceOnUse">
+      <line x1="40" y1="55" x2="860" y2="55" stroke="#c9d6e6" stroke-width="1.4"/>
+    </pattern>
+  </defs>
+  <rect width="900" height="1180" fill="#fbf7ec"/>
+  <rect x="0" y="300" width="900" height="760" fill="url(#rule)"/>
+  <rect x="24" y="24" width="852" height="1132" fill="none" stroke="#d9cfb5" stroke-width="3"/>
+
+  <g font-family="Georgia, 'Times New Roman', serif" fill="#1d3557" text-anchor="middle">
+    <text x="450" y="92" font-size="38" font-weight="bold" letter-spacing="3">PRIMARY HEALTH CENTRE</text>
+    <text x="450" y="132" font-size="22">Sample Mandal, Rangareddy District · OP Department</text>
+    <text x="450" y="164" font-size="20">Phone: 040 2345 6789</text>
+  </g>
+  <line x1="60" y1="190" x2="840" y2="190" stroke="#1d3557" stroke-width="2.5"/>
+
+  <g font-family="'Segoe Print', 'Bradley Hand', 'Comic Sans MS', cursive" fill="#123a8c">
+    <text x="70" y="240" font-size="27">Name: Lakshmamma</text>
+    <text x="520" y="240" font-size="27">Age/Sex: 62 / F</text>
+    <text x="70" y="285" font-size="27">Date: 12/08/2026</text>
+    <text x="520" y="285" font-size="27">Ph: 98765 43210</text>
+
+    <text x="70" y="400" font-size="30">c/o: increased thirst, tiredness</text>
+    <text x="70" y="452" font-size="30">Dx: T2DM (uncontrolled)</text>
+
+    <text x="70" y="540" font-size="54" font-family="Georgia, serif" font-style="italic">Rx</text>
+    <text x="110" y="612" font-size="30">1. Tab. Metformin 500 mg   1-0-1   after food   x 30 days</text>
+    <text x="110" y="668" font-size="30">2. Tab. Glimepiride 1 mg   1-0-0   before breakfast  x 30 days</text>
+
+    <text x="70" y="780" font-size="30">FBS: 182 mg/dl        PPBS: 264 mg/dl</text>
+    <text x="70" y="836" font-size="30">BP: 130/84</text>
+    <text x="70" y="948" font-size="30">Review after 1 month with FBS report.</text>
+
+    <path d="M560 1050 c 30 -40, 60 20, 90 -10 s 40 -30, 70 10 s 30 10, 60 -20" fill="none" stroke="#123a8c" stroke-width="3"/>
+    <text x="580" y="1100" font-size="24">Medical Officer</text>
+  </g>
+</svg>

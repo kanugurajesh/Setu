@@ -1,0 +1,6 @@
+node_modules
+.next
+.git
+.env*
+.playwright-mcp
+eval/results-*.json
