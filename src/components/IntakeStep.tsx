@@ -5,7 +5,7 @@ import type { OcrResponse, TranscriptResult } from "@/lib/client";
 import type { RedactionResult } from "@/lib/redact";
 import type { RuleResult } from "@/lib/safety-rules";
 import type { SampleCase } from "@/lib/samples";
-import { VITAL_FIELDS, type parseVitals } from "@/lib/vitals";
+import { VITAL_FIELDS, parseAge, type parseVitals } from "@/lib/vitals";
 import { DocCapture } from "./DocCapture";
 import { Icon } from "./icons";
 import { Recorder } from "./Recorder";
@@ -22,6 +22,7 @@ export function IntakeStep(p: {
   live: RuleResult;
   onTranscript: (r: TranscriptResult, bytes: number) => void;
   onOcr: (r: OcrResponse, bytes: number) => void;
+  onDoc: (doc: IntakeState["doc"]) => void;
   busy: boolean;
   error: string | null;
   onSubmit: () => void;
@@ -33,7 +34,8 @@ export function IntakeStep(p: {
   const [micErr, setMicErr] = useState<string | null>(null);
   const vitalErrors = Object.keys(parsed.errors).length;
   const tooShort = intake.transcript.trim().length < 15;
-  const canSubmit = !p.busy && !tooShort && vitalErrors === 0;
+  const ageError = parseAge(intake.ageYears).error;
+  const canSubmit = !p.busy && !tooShort && vitalErrors === 0 && !ageError;
 
   return (
     <>
@@ -68,7 +70,8 @@ export function IntakeStep(p: {
           </label>
           <label className="field">
             <span>Age (years)</span>
-            <input className="input" inputMode="decimal" value={intake.ageYears} onChange={(e) => patch({ ageYears: e.target.value })} placeholder="0.5 = 6 months" />
+            <input className={`input${ageError ? " bad" : ""}`} value={intake.ageYears} onChange={(e) => patch({ ageYears: e.target.value })} placeholder="45, or 2 months" aria-invalid={Boolean(ageError)} />
+            {ageError && <span className="hint bad">{ageError}</span>}
           </label>
           <label className="field">
             <span>Sex</span>
@@ -87,7 +90,7 @@ export function IntakeStep(p: {
           )}
           <label className="field" style={{ gridColumn: "1 / -1" }}>
             <span>Known conditions</span>
-            <input className="input" value={intake.knownConditions} onChange={(e) => patch({ knownConditions: e.target.value })} placeholder="e.g. Type 2 diabetes for 5 years" />
+            <input className="input" maxLength={300} value={intake.knownConditions} onChange={(e) => patch({ knownConditions: e.target.value })} placeholder="e.g. Type 2 diabetes for 5 years" />
           </label>
         </div>
       </div>
@@ -187,7 +190,7 @@ export function IntakeStep(p: {
         </div>
       </div>
 
-      <DocCapture doc={intake.doc} onDoc={(doc) => patch({ doc })} onTrace={p.onOcr} />
+      <DocCapture doc={intake.doc} onDoc={p.onDoc} onTrace={p.onOcr} />
 
       <div className="cta-bar">
         <div className="stack" style={{ gap: ".45rem", flex: "1 1 320px" }}>

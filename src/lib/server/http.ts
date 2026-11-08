@@ -25,8 +25,14 @@ export function rateLimit(key: string, limit = config.rateLimit): { ok: boolean;
   return { ok: true, retryAfterSec: 0 };
 }
 
-export function clientIp(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
+/**
+ * Proxies append to x-forwarded-for, so only the entries they added can be
+ * trusted. The first entry is whatever the client chose to send.
+ */
+export function clientIp(req: Request, hops = config.trustedProxyHops): string {
+  if (hops <= 0) return "local";
+  const chain = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return chain[Math.max(0, chain.length - hops)] || req.headers.get("x-real-ip") || "local";
 }
 
 export function errorJson(code: string, message: string, status: number, headers?: Record<string, string>) {

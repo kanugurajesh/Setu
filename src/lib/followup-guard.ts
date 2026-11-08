@@ -44,23 +44,63 @@ const ground = (evidence: string, transcript: string): CallGrounding => {
   return g === "vitals" || g === "document" ? "not_found" : g;
 };
 
-const sameMedicine = (a: string, b: string) => {
-  const x = normalizeForMatch(a).replace(/\b(tab|tablet|cap|capsule|syp|syrup)\b/g, "").trim();
-  const y = normalizeForMatch(b).replace(/\b(tab|tablet|cap|capsule|syp|syrup)\b/g, "").trim();
-  if (!x || !y) return false;
-  if (x === y || x.includes(y) || y.includes(x)) return true;
-  const first = (s: string) => s.split(" ").find((w) => w.length >= 4) ?? "";
-  return first(x) !== "" && first(x) === first(y);
+const medKey = (s: string) =>
+  normalizeForMatch(s)
+    .replace(/\b(tabs?|tablets?|caps?|capsules?|syp|syrup|inj|injection)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+const firstWord = (s: string) => s.split(" ").find((w) => w.length >= 4) ?? "";
+// A first word that names a family, not one medicine: Vitamin D3 is not Vitamin B12.
+const FAMILY_WORDS = new Set(["vitamin", "insulin", "calcium", "iron", "folic"]);
+
+const exactName = (p: string, r: string) => p === r;
+const containsName = (p: string, r: string) => ` ${p} `.includes(` ${r} `) || ` ${r} `.includes(` ${p} `);
+const sameFirstWord = (p: string, r: string, plan: string[]) => {
+  const w = firstWord(p);
+  return w !== "" && !FAMILY_WORDS.has(w) && w === firstWord(r) && plan.filter((x) => firstWord(x) === w).length === 1;
 };
+
+/**
+ * Pairs each plan medicine with at most one reported medicine, strongest match
+ * first, so one patient statement can never be read as being about two medicines.
+ */
+function matchMedicines<T extends { name: string }>(planNames: string[], reported: T[]) {
+  const plan = planNames.map(medKey);
+  const keys = reported.map((m) => medKey(m.name));
+  const matched: (T | undefined)[] = plan.map(() => undefined);
+  const free = new Set(reported.keys());
+  const tests = [exactName, containsName, sameFirstWord];
+  for (const test of tests) {
+    plan.forEach((p, i) => {
+      if (matched[i] || !p) return;
+      const j = [...free].find((k) => keys[k] && test(p, keys[k], plan));
+      if (j === undefined) return;
+      matched[i] = reported[j];
+      free.delete(j);
+    });
+  }
+  // Left over and resembling nothing in the plan: the model made it up.
+  const invented = [...free].filter((k) => !plan.some((p) => p && keys[k] && tests.some((t) => t(p, keys[k], plan)))).map((k) => reported[k].name);
+  return { matched, invented };
+}
 
 /**
  * A message that changes treatment ("double the dose", "stop the tablet",
  * "take 500 mg") is never passed on. "Do not stop your tablets" is fine.
  */
+const MED_WORDS = "doses?|tablets?|medicines?|medications?|pills?|insulin|antibiotics?|drugs?|syrup|capsules?|injections?|course|treatment";
+const CHANGE_MED = new RegExp(`\\b(?:double|increase|decrease|reduce|halve|stop|skip|start|add|switch|discontinue|change|cut|hold|pause|avoid|replace)\\b(?:(?!\\band\\b)[^.!?]){0,30}\\b(?:${MED_WORDS})\\b`, "gi");
+const TOLD_NOT_TO_TAKE = new RegExp(`\\b(?:do not|don'?t|never|not to)\\s+(?:take|taking|use|using|give|giving)\\b[^.!?]{0,30}\\b(?:${MED_WORDS})\\b`, "i");
+const TOLD_AN_AMOUNT = new RegExp(`\\b(?:take|have|give|use)\\s+(?:only\\s+|just\\s+|an?\\s+)?(?:one|two|three|four|five|half|double|extra|another|\\d+)\\b[^.!?]{0,20}\\b(?:${MED_WORDS})\\b`, "i");
+// Telugu and Hindi put the object first: "<medicine> ... <stop>". English letters are a medicine name.
+const LOCAL_MED = "మందు|మాత్ర|టాబ్లెట్|యాంటీబయాటిక్|ఇన్సులిన్|సిరప్|డోస్|दवा|दवाई|गोली|टैबलेट|एंटीबायोटिक|इंसुलिन|सिरप|खुराक|[A-Za-z]{4,}";
+const LOCAL_CHANGE = "ఆపేయ(?!వద్దు|కండి)|ఆపండి|ఆపాలి|మానేయ(?!వద్దు|కండి)|మానండి|మానాలి|తగ్గించ|పెంచ|రెట్టింపు|సగం|వేసుకోవద్దు|తీసుకోవద్దు|(?<!मत |न )बंद कर|(?<!मत |न )छोड़|मत लें|मत लो|मत खा|न लें|ना लें|दोगुन|दुगुन|आधी|कम कर|बढ़ा";
+const LOCAL_CHANGE_MED = new RegExp(`(?:${LOCAL_MED})(?:(?!और|మరియు)[^.!?।,\\n]){0,25}(?:${LOCAL_CHANGE})`, "u");
+
 export function messageChangesTreatment(msg: string): boolean {
   if (/\b\d+(\.\d+)?\s?(mg|ml|mcg|g)\b/i.test(msg)) return true;
-  const re = /\b(double|increase|decrease|reduce|halve|stop|skip|start|add|switch)\b[^.!?]{0,30}\b(doses?|tablets?|medicines?|pills?|insulin|antibiotics?|drugs?|syrup|capsules?|injections?|course|treatment)\b/gi;
-  for (const m of msg.matchAll(re)) {
+  if (TOLD_NOT_TO_TAKE.test(msg) || TOLD_AN_AMOUNT.test(msg) || LOCAL_CHANGE_MED.test(msg)) return true;
+  for (const m of msg.matchAll(CHANGE_MED)) {
     const before = msg.slice(Math.max(0, (m.index ?? 0) - 12), m.index ?? 0);
     if (!/\b(do not|don'?t|never|not)\s*$/i.test(before)) return true;
   }
@@ -101,12 +141,17 @@ export function guardFollowUp(
   };
 
   // One row per plan medicine, in plan order. Names the model made up are dropped.
-  const invented = raw.medicines.filter((m) => !src.planMedicines.some((p) => sameMedicine(p, m.name))).map((m) => m.name);
+  const { matched, invented } = matchMedicines(src.planMedicines, raw.medicines);
   if (invented.length) warnings.push(`Ignored ${invented.length} medicine(s) that are not in the plan: ${invented.join(", ")}.`);
-  const medicines = src.planMedicines.map((name) => {
-    const m = raw.medicines.find((x) => sameMedicine(name, x.name));
+  const medicines = src.planMedicines.map((name, i) => {
+    const m = matched[i];
     if (!m) return { name, status: "not_mentioned" as const, reason: "not stated", evidence: "", grounding: "none" as const };
     const grounding = tally(m.status === "not_mentioned" ? "none" : ground(m.evidence, src.transcript));
+    // "Taking it" is the one claim the floor can't catch, so it has to be proven.
+    if (m.status === "taking_as_prescribed" && (grounding === "none" || grounding === "not_found")) {
+      warnings.push(`"${name}: taking as prescribed" has no matching quote in the call. Ask the patient.`);
+      return { ...m, name, status: "not_mentioned" as const, grounding };
+    }
     return { ...m, name, grounding };
   });
 
@@ -126,14 +171,14 @@ export function guardFollowUp(
   const final = maxAction(raw.action, floorAction);
 
   let { message_local, message_english } = raw;
-  if (messageChangesTreatment(message_english)) {
+  if (messageChangesTreatment(message_english) || messageChangesTreatment(message_local)) {
     warnings.push("The suggested message seemed to change a medicine or dose, so it was withheld. Only the doctor changes treatment.");
     message_local = "";
     message_english = "";
   }
 
   // When the patient must come in, the next call is tomorrow: did they reach?
-  const cap = ACTION_RANK[final] >= ACTION_RANK.come_in_now ? 1 : ACTION_RANK[final] >= ACTION_RANK.doctor_review ? 2 : 14;
+  const cap = ACTION_RANK[final] >= ACTION_RANK.come_in_now ? 1 : ACTION_RANK[final] >= ACTION_RANK.doctor_review ? 2 : ACTION_RANK[final] >= ACTION_RANK.call_again ? 3 : 14;
   const next_check_in_days = Math.max(1, Math.min(cap, Math.round(raw.next_check_in_days) || 3));
 
   return {

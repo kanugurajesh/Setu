@@ -18,12 +18,12 @@ export interface RedactionResult {
 
 const PATTERNS: [RedactionKind, RegExp][] = [
   ["email", /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi],
-  // ABHA health ID: 14 digits written 2-4-4-4
-  ["abha", /(?<!\d)\d{2}-\d{4}-\d{4}-\d{4}(?!\d)/g],
+  // ABHA health ID: 14 digits, optionally grouped 2-4-4-4
+  ["abha", /(?<!\d)\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g],
   // Aadhaar: 12 digits, first digit 2-9, optionally grouped 4-4-4
   ["aadhaar", /(?<!\d)[2-9]\d{3}[\s-]?\d{4}[\s-]?\d{4}(?!\d)/g],
-  // Indian mobile: optional +91 / 0 prefix, 10 digits starting 6-9, optional 5-5 split
-  ["phone", /(?<![\d+])(?:\+91[\s-]?|0)?[6-9]\d{4}[\s-]?\d{5}(?!\d)/g],
+  // Indian mobile: optional +91 / 0 prefix, 10 digits starting 6-9, optional 5-5 or 3-3-4 split
+  ["phone", /(?<![\d+])(?:\+91[\s-]?|0)?(?:[6-9]\d{4}[\s-]?\d{5}|[6-9]\d{2}[\s-]\d{3}[\s-]\d{4})(?!\d)/g],
 ];
 
 const TOKEN: Record<RedactionKind, string> = {
@@ -56,10 +56,11 @@ export function redact(input: string, opts: { names?: string[] } = {}): Redactio
   const bump = (k: RedactionKind) => (counts[k] = (counts[k] ?? 0) + 1);
 
   for (const name of nameVariants(opts.names ?? [])) {
-    // \b only works for Latin script; for Telugu/Devanagari match the literal
+    // \b only works for Latin script. For Telugu/Devanagari, check the start of the
+    // word only: case endings attach to the name ("లక్ష్మమ్మకు"), but "आराम" is not "राम".
     const re = isLatin(name)
       ? new RegExp(`\\b${escapeRe(name)}\\b`, "giu")
-      : new RegExp(escapeRe(name), "gu");
+      : new RegExp(`(?<![\\p{L}\\p{M}])${escapeRe(name)}`, "gu");
     text = text.replace(re, () => {
       bump("name");
       return "[PATIENT]";

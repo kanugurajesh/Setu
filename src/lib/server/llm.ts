@@ -37,10 +37,16 @@ function requireKey() {
   if (!config.apiKey) throw new LLMError("not_configured", "The server has no GROQ_API_KEY (or LLM_API_KEY) configured.", 503);
 }
 
-async function request(path: string, init: RequestInit, timeoutMs: number, retries = 2): Promise<{ res: Response; attempts: number }> {
+const timedOut = () => new LLMError("timeout", "The AI service took too long to respond.", 504);
+
+/** `deadline` is absolute and shared by every attempt, so retries can't outlive the route. */
+async function request(path: string, init: RequestInit, deadline: number, retries = 2): Promise<{ res: Response; attempts: number }> {
+  const hasTimeFor = (waitMs: number) => Date.now() + waitMs + 2000 < deadline;
   for (let attempt = 1; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw timedOut();
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), remaining);
     try {
       const res = await fetch(`${config.baseUrl}${path}`, {
         ...init,
@@ -53,14 +59,18 @@ async function request(path: string, init: RequestInit, timeoutMs: number, retri
         // clears within ~20 s. Waiting it out once inside the 60 s route budget beats
         // showing "busy" to a coordinator mid-consultation. 5xx stays short.
         const cap = res.status === 429 && attempt === 1 ? 20_000 : 4000;
-        await sleep(Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 500 * 2 ** (attempt - 1), cap));
-        continue;
+        const wait = Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 500 * 2 ** (attempt - 1), cap);
+        if (hasTimeFor(wait)) {
+          await sleep(wait);
+          continue;
+        }
       }
       return { res, attempts: attempt };
     } catch (err) {
-      if ((err as Error).name === "AbortError") throw new LLMError("timeout", "The AI service took too long to respond.", 504);
-      if (attempt <= retries) {
-        await sleep(500 * 2 ** (attempt - 1));
+      if ((err as Error).name === "AbortError") throw timedOut();
+      const wait = 500 * 2 ** (attempt - 1);
+      if (attempt <= retries && hasTimeFor(wait)) {
+        await sleep(wait);
         continue;
       }
       throw new LLMError("upstream", "Could not reach the AI service.", 502);
@@ -108,6 +118,7 @@ export async function chatJSON<T>(opts: {
   const strict = opts.strict ?? true;
   const jsonSchema = toStrictJsonSchema(opts.schema);
   const started = Date.now();
+  const deadline = started + (opts.timeoutMs ?? config.timeoutMs);
   let attempts = 0;
   let promptTokens = 0;
   let completionTokens = 0;
@@ -128,7 +139,7 @@ export async function chatJSON<T>(opts: {
     const { res, attempts: a } = await request(
       "/chat/completions",
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-      opts.timeoutMs ?? config.timeoutMs,
+      deadline,
     );
     attempts += a;
     if (!res.ok) {
@@ -210,7 +221,7 @@ export async function transcribe(file: Blob, filename: string, language?: string
   // output toward its language, so only use it for English.
   if (language === "en") fd.append("prompt", "Rural health centre consultation. BP, sugar, SpO2, fever, cough, metformin, paracetamol, amlodipine.");
 
-  const { res, attempts } = await request("/audio/transcriptions", { method: "POST", body: fd }, 90_000);
+  const { res, attempts } = await request("/audio/transcriptions", { method: "POST", body: fd }, started + config.timeoutMs);
   if (!res.ok) await failFromResponse(res, "transcribe");
   const json = (await res.json()) as {
     text?: string;

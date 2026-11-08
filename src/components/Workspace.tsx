@@ -6,7 +6,7 @@ import { redact } from "@/lib/redact";
 import { evaluateRules } from "@/lib/safety-rules";
 import { SAMPLES, type SampleCase } from "@/lib/samples";
 import type { FollowUpRequest, LangCode, Patient } from "@/lib/schemas";
-import { EMPTY_VITALS, parseVitals, type VitalStrings } from "@/lib/vitals";
+import { EMPTY_VITALS, parseAge, parseVitals, type VitalStrings } from "@/lib/vitals";
 import { BriefStep } from "./BriefStep";
 import { FollowUpStep } from "./FollowUpStep";
 import type { CapturedDoc } from "./DocCapture";
@@ -44,6 +44,11 @@ const EMPTY: IntakeState = {
 
 const now = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
+// The server's limit for documentText.
+const MAX_DOCUMENT_CHARS = 6000;
+const CUT_NOTE = "\n[rest of the document not included]";
+const fitDocument = (s: string) => (s.length <= MAX_DOCUMENT_CHARS ? s : s.slice(0, MAX_DOCUMENT_CHARS - CUT_NOTE.length) + CUT_NOTE);
+
 type Step = 0 | 1 | 2 | 3;
 
 export default function Workspace() {
@@ -67,6 +72,16 @@ export default function Workspace() {
   const [followErr, setFollowErr] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceEntry[]>([]);
   const traceId = useRef(0);
+  // Each patient is a session. A response that arrives after the coordinator has
+  // moved on belongs to the previous patient and must not land on this one. The
+  // state is what a callback saw when it was created; the ref is what is true now.
+  const [session, setSession] = useState(0);
+  const liveSession = useRef(0);
+  const isOldSession = () => session !== liveSession.current;
+  const startSession = () => {
+    liveSession.current += 1;
+    setSession(liveSession.current);
+  };
 
   const patch = useCallback((p: Partial<IntakeState>) => setIntake((s) => ({ ...s, ...p })), []);
   const addTrace = useCallback((e: Omit<TraceEntry, "id" | "at">) => {
@@ -82,19 +97,24 @@ export default function Workspace() {
   const redacted = useMemo(() => redact(intake.transcript, { names }), [intake.transcript, names]);
   const parsed = useMemo(() => parseVitals(intake.vitals), [intake.vitals]);
   const patient: Patient = useMemo(() => {
-    const age = Number(intake.ageYears);
     return {
-      ageYears: intake.ageYears.trim() && Number.isFinite(age) && age >= 0 && age <= 120 ? age : undefined,
+      ageYears: parseAge(intake.ageYears).years,
       sex: intake.sex || undefined,
       pregnant: intake.sex === "female" && intake.pregnant ? true : undefined,
-      knownConditions: intake.knownConditions.trim() ? redact(intake.knownConditions, { names }).text : undefined,
+      knownConditions: intake.knownConditions.trim() ? redact(intake.knownConditions, { names }).text.slice(0, 300) : undefined,
     };
   }, [intake.ageYears, intake.sex, intake.pregnant, intake.knownConditions, names]);
   const live = useMemo(() => evaluateRules({ text: redacted.text, vitals: parsed.vitals, patient }), [redacted.text, parsed.vitals, patient]);
 
   const briefRequest = useMemo(
-    () => ({ transcript: redacted.text, patient, vitals: parsed.vitals, documentText: intake.doc?.extract.full_text || undefined }),
-    [redacted.text, patient, parsed.vitals, intake.doc],
+    () => ({
+      transcript: redacted.text,
+      patient,
+      vitals: parsed.vitals,
+      // Prescriptions carry the patient's name, and only this device knows it.
+      documentText: intake.doc?.extract.full_text ? fitDocument(redact(intake.doc.extract.full_text, { names }).text) : undefined,
+    }),
+    [redacted.text, patient, parsed.vitals, intake.doc, names],
   );
   const currentBriefKey = JSON.stringify(briefRequest);
 
@@ -139,6 +159,7 @@ export default function Workspace() {
 
   /* ---------- actions ---------- */
   function loadSample(s: SampleCase) {
+    startSession();
     setIntake({
       ...EMPTY,
       sampleId: s.id,
@@ -169,10 +190,13 @@ export default function Workspace() {
   }
 
   function onTranscript(r: TranscriptResult, bytes: number) {
-    patch({
-      transcript: intake.transcript.trim() ? `${intake.transcript.trim()}\n${r.text}` : r.text,
-      lowConfidence: [...intake.lowConfidence, ...r.lowConfidence.map((s) => s.text)].slice(-8),
-    });
+    if (isOldSession()) return;
+    // Read the latest text: the coordinator may have typed while this was recording.
+    setIntake((s) => ({
+      ...s,
+      transcript: s.transcript.trim() ? `${s.transcript.trim()}\n${r.text}` : r.text,
+      lowConfidence: [...s.lowConfidence, ...r.lowConfidence.map((x) => x.text)].slice(-8),
+    }));
     addTrace({
       step: "Speech → text",
       model: r.meta.model,
@@ -187,7 +211,12 @@ export default function Workspace() {
     });
   }
 
+  function onDoc(doc: IntakeState["doc"]) {
+    if (!isOldSession()) patch({ doc });
+  }
+
   function onOcr(r: OcrResponse, bytes: number) {
+    if (isOldSession()) return;
     addTrace({
       step: "Document → structured",
       model: r.meta.model,
@@ -208,6 +237,7 @@ export default function Workspace() {
     setBriefErr(null);
     try {
       const r = await postJSON<BriefResponse>("/api/brief", briefRequest);
+      if (isOldSession()) return;
       setBrief(r);
       setBriefKey(currentBriefKey);
       setPlan(null);
@@ -227,6 +257,7 @@ export default function Workspace() {
         ],
       });
     } catch (e) {
+      if (isOldSession()) return;
       const msg = e instanceof ApiError ? e.message : "Could not prepare the brief.";
       setBriefErr(msg);
       addTrace({ step: "Conversation → doctor brief", ok: false, notes: [msg] });
@@ -241,6 +272,7 @@ export default function Workspace() {
     setPlanErr(null);
     try {
       const r = await postJSON<PlanResponse>("/api/plan", planRequest);
+      if (isOldSession()) return;
       setPlan(r);
       setPlanKey(currentPlanKey);
       setFollow(null);
@@ -259,6 +291,7 @@ export default function Workspace() {
         ],
       });
     } catch (e) {
+      if (isOldSession()) return;
       const msg = e instanceof ApiError ? e.message : "Could not write the plan.";
       setPlanErr(msg);
       addTrace({ step: "Advice → take-home plan", ok: false, notes: [msg] });
@@ -268,6 +301,7 @@ export default function Workspace() {
   }
 
   function onCallTranscript(r: TranscriptResult, bytes: number) {
+    if (isOldSession()) return;
     setCallText((t) => (t.trim() ? `${t.trim()}\n${r.text}` : r.text));
     addTrace({
       step: "Call → text",
@@ -285,6 +319,7 @@ export default function Workspace() {
     setFollowErr(null);
     try {
       const r = await postJSON<FollowUpResponse>("/api/followup", followRequest);
+      if (isOldSession()) return;
       setFollow(r);
       setFollowKey(currentFollowKey);
       const stopped = r.followUp.medicines.filter((m) => m.status === "stopped").length;
@@ -302,6 +337,7 @@ export default function Workspace() {
         ],
       });
     } catch (e) {
+      if (isOldSession()) return;
       const msg = e instanceof ApiError ? e.message : "Could not check the call.";
       setFollowErr(msg);
       addTrace({ step: "Check-in call → next action", ok: false, notes: [msg] });
@@ -311,6 +347,7 @@ export default function Workspace() {
   }
 
   function newPatient() {
+    startSession();
     setIntake(EMPTY);
     setBrief(null);
     setPlan(null);
@@ -399,6 +436,7 @@ export default function Workspace() {
               live={live}
               onTranscript={onTranscript}
               onOcr={onOcr}
+              onDoc={onDoc}
               busy={briefBusy}
               error={briefErr}
               onSubmit={makeBrief}

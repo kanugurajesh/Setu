@@ -96,6 +96,9 @@ const WORD_RULES: WordRule[] = [
     urgency: "urgent",
     patterns: [
       /breathless|short(ness)? of breath|difficulty (in )?breathing|can'?t breathe|gasping/i,
+      // "ఊపిరి ఆడటం లేదు" ("I can't breathe") and "साँस नहीं आ रही": here the negative IS the symptom
+      /ఊపిరి\s*(ఆడ|అంద)[^.?!\n।,\s]*\s*లేదు/u,
+      /(साँस|सांस)\s*(नहीं|नही)\s*(आ|ले)/u,
       /ఆయాసం|ఊపిరి (ఆడ|అంద)/u,
       /(साँस|सांस) (फूल|लेने में)/u,
     ],
@@ -165,17 +168,53 @@ const WORD_RULES: WordRule[] = [
   },
 ];
 
-const EN_NEGATION = /\b(no|not|denies|denied|without|never|nil|negative for)\b(?:(?!\bbut\b)[^.;,\n?!।])*$/i;
-const LOCAL_NEGATION_AFTER = /^[^.;,\n?!।]{0,20}(లేదు|లేవు|లేదని|नहीं|नही)/u;
+/* A denial or question only counts when it is clearly about this symptom. An
+   unclear sentence stays flagged: a false alarm costs a look, a miss costs far more. */
+const SP = "[ \\t]+";
+const EN_FILLER = `(?:(?:any|a|an|the|have|has|had|having|get|gets|getting|got|feel|feels|feeling|felt|experience|experiences|experiencing|complain|complains|complaining|complaint|complaints|report|reports|reporting|history|h/o|c/o|of|sign|signs|symptom|symptoms|episode|episodes|further|more|new|longer|her|his|my|their|recent)${SP})*`;
+const enNegation = (heads: string, joiners: string) =>
+  new RegExp(`\\b(?:${heads})${SP}${EN_FILLER}(?:[\\p{L}\\p{N}'-]+(?:${SP}[\\p{L}\\p{N}'-]+)?${SP}(?:${joiners})${SP}${EN_FILLER})*$`, "iu");
+const EN_NEGATIONS = [
+  // "No fever and chest pain" is ambiguous, so plain "no" only spans or/nor lists.
+  enNegation("no|not|never|nil|without|(?:do|does|did|has|have|had|is|was)n'?t", "or|nor"),
+  enNegation("denies|denied|deny|negative for", "or|nor|and"),
+];
+
+// Whole word only: "తగ్గలేదు" (has not reduced) contains లేదు but denies nothing.
+const LOCAL_NEGATOR = /(?<![\p{L}\p{M}])(?:లేదు|లేవు|లేదని|नहीं|नही)(?![\p{L}\p{M}])/u;
+// "తగ్గడం లేదు", "दर्द कम नहीं": the symptom has NOT gone away.
+const LOCAL_PERSISTS = /తగ్గ|ఆగ|పోవ|పోల|कम|ठीक|बंद|गया|गयी|गई|रुक|जा\s|हट|आराम/u;
+// "ఛాతీ నొప్పి ఉంది జ్వరం లేదు": the negator belongs to the next symptom.
+const LOCAL_AFFIRMED = /ఉంది|ఉన్నాయి|వస్తోంది|వస్తుంది|అవుతోంది|కానీ|పైగా|है|हैं|रहा|रही|और|लेकिन/u;
+
+function isLocallyDenied(after: string): boolean {
+  const clauseEnd = after.search(/[.;,\n?!।]/);
+  const clause = clauseEnd >= 0 ? after.slice(0, clauseEnd) : after;
+  const found = LOCAL_NEGATOR.exec(clause);
+  if (!found || found.index > 20) return false;
+  const between = clause.slice(0, found.index);
+  return !LOCAL_PERSISTS.test(between) && !LOCAL_AFFIRMED.test(between);
+}
+
+const ASKS_FROM_THE_START = /^(?:do|does|did|any|is|are|was|were|have|has|had|when|how|what|where|why)\b/i;
+const STATES_IT_HAS = /\b(?:i|she|he|we|they|my|her|his)\s+(?:have|has|had|am|is|got|feel|feels|having)\b/i;
+// A different question later in the sentence: "I have chest pain, should I come?"
+const ASKS_SOMETHING_ELSE = /[,;]|\b(?:what|should|shall|can|could|will|would|how|why|where|must|do i|is it)\b|ఏం|ఏమి|ఎలా|ఎందుకు|क्या कर|कैसे|कहाँ|कहां|क्यों|चाहिए/iu;
+
+function isQuestionAboutIt(before: string, after: string): boolean {
+  const clauseEnd = after.search(/[.!?\n।]/);
+  if (clauseEnd < 0 || after[clauseEnd] !== "?") return false;
+  const lead = (before.split(/[.!?\n।;,]/).pop() ?? "").replace(/^\s*[\p{L}\p{M}]+\s*:\s*/u, "").trimStart();
+  if (ASKS_FROM_THE_START.test(lead)) return true;
+  if (STATES_IT_HAS.test(lead)) return false;
+  return !ASKS_SOMETHING_ELSE.test(after.slice(0, clauseEnd));
+}
 
 /** Is this match negated or only asked about? Exported for tests. */
 export function isNegatedOrQuestion(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 40), start);
   const after = text.slice(end, end + 40);
-  if (EN_NEGATION.test(before)) return true;
-  if (LOCAL_NEGATION_AFTER.test(after)) return true;
-  const clauseEnd = after.search(/[.!?\n।]/);
-  return clauseEnd >= 0 && after[clauseEnd] === "?";
+  return EN_NEGATIONS.some((r) => r.test(before)) || isLocallyDenied(after) || isQuestionAboutIt(before, after);
 }
 
 export function wordRules(text: string, p: Patient = {}): RuleFlag[] {
@@ -208,7 +247,8 @@ export function evaluateRules(input: { text: string; vitals: Vitals; patient: Pa
   const flags = [...vitalRules(input.vitals, input.patient), ...wordRules(input.text, input.patient)];
 
   // Combination: pregnancy + (headache or blurred vision) + raised BP is a classic pre-eclampsia picture
-  const pe = input.patient.pregnant && flags.some((f) => f.id === "bp-pregnancy") && flags.some((f) => f.id === "vision" || f.id === "severe-headache");
+  // bp-severe takes the place of bp-pregnancy at 180/120 and above, so both must count.
+  const pe = input.patient.pregnant && flags.some((f) => f.id === "bp-pregnancy" || f.id === "bp-severe") && flags.some((f) => f.id === "vision" || f.id === "severe-headache");
   if (pe)
     flags.push({
       id: "pre-eclampsia-picture",

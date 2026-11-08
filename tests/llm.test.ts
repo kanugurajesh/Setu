@@ -59,6 +59,15 @@ describe("chatJSON", () => {
     expect(err.message).not.toMatch(/patient/);
   });
 
+  it("does not wait out a retry that would overrun the time budget", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 429, headers: { "retry-after": "30" } }));
+    const started = Date.now();
+    const err = await chatJSON({ step: "t", schema: Schema, schemaName: "t", messages: [{ role: "user", content: "hi" }], timeoutMs: 5000 }).catch((e) => e);
+    expect(err.code).toBe("rate_limited");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("gives up after two bad passes", async () => {
     fetchMock.mockImplementation(async () => ok("not json"));
     await expect(call()).rejects.toMatchObject({ code: "invalid_output" });

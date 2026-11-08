@@ -17,7 +17,8 @@ describe("evidence grounding", () => {
     expect(checkEvidence("patient has severe vomiting since yesterday", { transcript })).toBe("not_found");
   });
   it("handles structured sources", () => {
-    expect(checkEvidence("[vitals]", { transcript })).toBe("vitals");
+    expect(checkEvidence("[vitals]", { transcript, hasVitals: true })).toBe("vitals");
+    expect(checkEvidence("[vitals]", { transcript })).toBe("not_found");
     expect(checkEvidence("[document]", { transcript })).toBe("not_found");
     expect(checkEvidence("[document]", { transcript, documentText: "Tab Metformin" })).toBe("document");
   });
@@ -41,7 +42,7 @@ describe("evidence grounding", () => {
       considerations: [],
       transcript_language: "Telugu",
     };
-    const { stats, brief: g } = groundBrief(brief, { transcript });
+    const { stats, brief: g } = groundBrief(brief, { transcript, hasVitals: true });
     expect(stats).toMatchObject({ total: 3, quoted: 1, structured: 1, notFound: 1 });
     expect(g.symptoms[1].grounding).toBe("not_found");
   });

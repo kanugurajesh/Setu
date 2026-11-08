@@ -8,10 +8,16 @@ import type { Plan } from "./schemas";
 
 const norm = (s: string) => s.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
+const numbersIn = (s: string) => s.replace(/(\d),(?=\d)/g, "$1").match(/\d+(?:\.\d+)?/g) ?? [];
+const numbersAllIn = (name: string, text: string) => {
+  const have = new Set(numbersIn(text));
+  return numbersIn(name).every((n) => have.has(n));
+};
+
 export function medicineIsInAdvice(name: string, sourceText: string, advice: string): boolean {
   const a = norm(advice);
   const n = norm(name);
-  if (n.length >= 3 && a.includes(n)) return true;
+  if (n.length >= 3 && a.includes(n)) return numbersAllIn(name, advice);
   // Doctor may write "Tab. Amoxyclav 625" while the model writes "Amoxyclav 625 mg":
   // accept if the distinctive first word (>= 4 letters, not a form word) is present
   // AND the quoted source phrase is present.
@@ -20,7 +26,8 @@ export function medicineIsInAdvice(name: string, sourceText: string, advice: str
     .map(norm)
     .find((w) => w.length >= 4 && !/^(tab|tablet|tabs|cap|capsule|syrup|syp|inj|injection|drops?)$/.test(w));
   const src = norm(sourceText);
-  return Boolean(first && a.includes(first) && src.length >= 4 && a.includes(src));
+  // Any strength in the name must come from that same phrase: 5 mg can't become 10 mg.
+  return Boolean(first && a.includes(first) && src.length >= 4 && a.includes(src)) && numbersAllIn(name, sourceText);
 }
 
 // A form word followed by a capitalised drug name ("Tab Paracetamol", "Cap. Amoxil"),
@@ -46,7 +53,7 @@ export function guardPlan(plan: Plan, advice: string): GuardResult {
     return ok;
   });
   if (removed.length)
-    warnings.push(`Removed ${removed.length} medicine(s) not found in the doctor's advice: ${removed.join(", ")}.`);
+    warnings.push(`Removed ${removed.length} medicine(s) whose name or strength is not in the doctor's advice: ${removed.join(", ")}.`);
 
   const mentioned = countMedicineMentions(advice);
   if (mentioned > medicines.length)

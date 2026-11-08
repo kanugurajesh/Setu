@@ -29,9 +29,9 @@ export const normalizeForMatch = (s: string) =>
 
 const tokens = (s: string) => normalizeForMatch(s).split(" ").filter(Boolean);
 
-export function checkEvidence(evidence: string, src: { transcript: string; documentText?: string }): Grounding {
+export function checkEvidence(evidence: string, src: { transcript: string; documentText?: string; hasVitals?: boolean }): Grounding {
   const ev = evidence.trim();
-  if (/^\[vitals\]$/i.test(ev)) return "vitals";
+  if (/^\[vitals\]$/i.test(ev)) return src.hasVitals ? "vitals" : "not_found";
   if (/^\[document\]$/i.test(ev)) return src.documentText ? "document" : "not_found";
 
   const needle = normalizeForMatch(ev);
@@ -71,7 +71,7 @@ export type GroundedBrief = Omit<
 
 const LIST_KEYS = ["symptoms", "pertinent_negatives", "history", "current_medications", "allergies", "social_context", "red_flags"] as const;
 
-export function groundBrief(brief: Brief, src: { transcript: string; documentText?: string }): { brief: GroundedBrief; stats: GroundingStats } {
+export function groundBrief(brief: Brief, src: { transcript: string; documentText?: string; hasVitals?: boolean }): { brief: GroundedBrief; stats: GroundingStats } {
   const stats = { total: 0, quoted: 0, close: 0, structured: 0, notFound: 0, verifiedRatio: 1 };
   const out: Record<string, unknown> = { ...brief };
   for (const key of LIST_KEYS) {

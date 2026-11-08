@@ -42,7 +42,7 @@ export async function buildBrief(req: StructureRequest): Promise<BriefResponse> 
   });
 
   const brief = capBrief(data);
-  const grounded = groundBrief(brief, { transcript: t.text, documentText: doc });
+  const grounded = groundBrief(brief, { transcript: t.text, documentText: doc, hasVitals: Object.values(req.vitals).some((v) => v !== undefined) });
   const final = maxUrgency(brief.urgency, rules.urgency);
   return {
     brief: grounded.brief,

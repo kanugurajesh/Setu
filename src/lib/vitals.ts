@@ -17,6 +17,19 @@ export const VITAL_FIELDS: { key: VitalKey; label: string; unit: string; min: nu
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+/** "45", "0.5", "2 months", "3 weeks", "10 days". Unreadable input is an error, never silently "no age". */
+export function parseAge(raw: string): { years?: number; error?: string } {
+  const s = raw.trim().toLowerCase();
+  if (!s) return {};
+  const m = s.match(/^(\d+(?:[.,]\d+)?)\s*(y|yr|yrs|year|years|m|mo|mon|month|months|w|wk|wks|week|weeks|d|day|days)?$/);
+  const error = "Use years, or e.g. 2 months";
+  if (!m) return { error };
+  const n = Number(m[1].replace(",", "."));
+  const perYear = { y: 1, m: 12, w: 52, d: 365 }[(m[2]?.[0] ?? "y") as "y" | "m" | "w" | "d"];
+  const years = Math.round((n / perYear) * 1000) / 1000;
+  return years > 120 ? { error } : { years };
+}
+
 /** Parses the form. Temperatures above 50 are read as °F (most clinic thermometers) and converted. */
 export function parseVitals(v: VitalStrings): { vitals: Vitals; errors: Partial<Record<VitalKey, string>>; tempNote?: string } {
   const vitals: Vitals = {};

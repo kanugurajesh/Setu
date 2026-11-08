@@ -40,7 +40,7 @@ export const PatientSchema = z.object({
 export type Patient = z.infer<typeof PatientSchema>;
 
 export const StructureRequest = z.object({
-  transcript: z.string().trim().min(15, "Add a little more of the conversation first.").max(8000),
+  transcript: z.string().trim().min(15, "Add a little more of the conversation first.").max(8000, "The conversation is too long. Keep the parts that matter for the doctor."),
   patient: PatientSchema.default({}),
   vitals: VitalsSchema.default({}),
   documentText: z.string().max(6000).optional(),
@@ -48,7 +48,7 @@ export const StructureRequest = z.object({
 export type StructureRequest = z.infer<typeof StructureRequest>;
 
 export const PlanRequest = z.object({
-  doctorAdvice: z.string().trim().min(10, "The doctor's advice is needed before a plan can be written.").max(4000),
+  doctorAdvice: z.string().trim().min(10, "The doctor's advice is needed before a plan can be written.").max(4000, "The doctor's advice is too long. Shorten it and try again."),
   language: z.enum(["te", "hi", "en"]),
   patient: PatientSchema.default({}),
   context: z
@@ -180,7 +180,7 @@ export const maxAction = (...a: FollowAction[]): FollowAction =>
   a.reduce((x, y) => (ACTION_RANK[y] > ACTION_RANK[x] ? y : x), "on_track" as FollowAction);
 
 export const FollowUpRequest = z.object({
-  transcript: z.string().trim().min(15, "Add a little more of the call first.").max(6000),
+  transcript: z.string().trim().min(15, "Add a little more of the call first.").max(6000, "The call is too long. Keep the parts about medicines and symptoms."),
   daysSinceVisit: z.number().int().min(0).max(120),
   language: z.enum(["te", "hi", "en"]),
   patient: PatientSchema.default({}),

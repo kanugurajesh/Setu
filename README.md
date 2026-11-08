@@ -36,7 +36,7 @@ All three models are **open-weight**, served by **Groq**. Change `LLM_BASE_URL` 
 | **The AI cannot prescribe.** Any medicine in the plan that doesn't trace to the doctor's advice is removed and reported. Staff are warned if the advice mentions more medicines than the plan shows, or if a timing is unclear. | `src/lib/plan-guard.ts` |
 | **Follow-up floor.** On the check-in call: a danger sign heard → come in now; a medicine stopped or the patient getting worse → doctor review; missed doses, or a call that never covered the medicines → call again. Final action = `max(model, floor)`. Medicines the model names that aren't in the plan are dropped, and claims without a matching quote are flagged. A suggested message that changes a dose ("stop the antibiotic", "take 500 mg") is **withheld**. | `src/lib/followup-guard.ts` |
 | **No PHI in logs.** Upstream error bodies (which can echo patient text) are never logged or returned. Logs carry only route, status, error code and latency. | `src/lib/server/http.ts` |
-| **Abuse and failure handling.** Per-IP rate limit, input size caps, 60 s timeouts, retry with backoff on 429/5xx, typed errors mapped to plain-language messages, offline detection that keeps the form. | `src/lib/server/*`, `src/lib/client.ts` |
+| **Abuse and failure handling.** Per-IP rate limit, input size caps, a 55 s budget per AI step (retries included), retry with backoff on 429/5xx, typed errors mapped to plain-language messages, offline detection that keeps the form. | `src/lib/server/*`, `src/lib/client.ts` |
 | **Browser hardening.** Strict CSP (`connect-src 'self'`; the API key and model endpoints never reach the browser), frame-ancestors none, mic/camera self-only. | `next.config.mjs` |
 | **Field realities.** 24 kbps Opus audio (~540 KB for 3 min), photos shrunk on the device to ~200 KB, °F auto-converted, self-hosted fonts, no login on a shared tablet, nothing persisted. | `Recorder.tsx`, `client.ts`, `vitals.ts` |
 
@@ -55,7 +55,7 @@ Pick a synthetic case (Telugu pneumonia, English hypertension with negations, Hi
 ## Test & evaluate
 
 ```bash
-npm test          # 50 unit tests: redaction, safety rules (3 languages), grounding, plan guard, follow-up floor, LLM client retries/repair
+npm test          # 126 unit tests: redaction, safety rules (3 languages), grounding, plan guard, follow-up floor, LLM client retries/repair
 npm run eval      # live eval on 7 synthetic cases + 3 check-in calls → eval/results.md
 ```
 
@@ -93,6 +93,8 @@ docker build -t setu . && docker run -p 3000:3000 -e GROQ_API_KEY=... setu
 | `VISION_MODEL` | `qwen/qwen3.8-27b` |
 | `STT_MODEL` | `whisper-large-v3` |
 | `RATE_LIMIT` | `30` requests / 5 min / IP / endpoint |
+| `TRUSTED_PROXY_HOPS` | `1`. Proxies that append to `x-forwarded-for`. Set `0` if the app is exposed directly |
+| `LLM_TIMEOUT_MS` | `55000`, total for one AI step including retries. Raise for slow local GPUs |
 | `NEXT_PUBLIC_AUTHOR_NAME`, `NEXT_PUBLIC_AUTHOR_URL`, `NEXT_PUBLIC_REPO_URL` | footer credits |
 
 ## Layout
